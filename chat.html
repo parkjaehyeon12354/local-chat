@@ -245,6 +245,16 @@ button{font-family:inherit;}
 .cleft{display:flex;gap:2px;}
 .cic{background:none;border:0;color:#888;font-size:17px;cursor:pointer;width:33px;height:33px;border-radius:8px;display:flex;align-items:center;justify-content:center;}
 .cic:hover{background:#1f1f1f;color:#ccc;}
+.cic.on{color:#7aa2f7;background:rgba(122,162,247,.12);}
+.web{margin-top:9px;font-size:12px;color:#8aa;}
+.web summary{cursor:pointer;list-style:none;display:inline-block;color:#7aa2f7;background:rgba(122,162,247,.09);border-radius:10px;padding:2px 9px;font-size:11px;}
+.web summary::-webkit-details-marker{display:none;}
+.web.err summary{color:#e3a35b;background:rgba(227,163,91,.09);}
+.web ol{margin:7px 0 0;padding-left:20px;}
+.web li{margin:3px 0;line-height:1.45;}
+.web a{color:#9ab;text-decoration:none;}
+.web a:hover{text-decoration:underline;}
+.web .sn{color:#777;}
 #sendBtn{width:38px;height:38px;border-radius:50%;background:#f5442e;border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;transition:background .18s,box-shadow .25s,transform .12s;box-shadow:0 0 0 0 rgba(245,68,46,.45);}
 #sendBtn:hover{background:#ff5a44;box-shadow:0 4px 16px rgba(245,68,46,.5);}
 #sendBtn:active{transform:scale(.94);box-shadow:none;}
@@ -318,6 +328,7 @@ button{font-family:inherit;}
             <button class="cic" title="특수기능">✳</button>
             <button class="cic" title="명령">∕</button>
             <button class="cic" title="변환">⇅</button>
+            <button class="cic" id="webBtn" title="웹 검색 — 켜면 필요할 때 검색해서 답에 참고해요">🔍</button>
           </div>
           <button id="sendBtn" title="전송">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><polygon points="6,4 20,12 6,20"/></svg>
@@ -530,6 +541,7 @@ let loggedTurns = 0;        // 어디까지 기록했는지
 let eventEvery = 20;        // 몇 턴마다 자동 요약할지 (0 = 끔)
 let eventMode = 'append';   // append | full | chars
 let chronAll = false;       // true 면 줄거리를 매 턴 통째로 넣는다
+let webOn = false;          // 이 방에서 웹 검색을 쓴다 (판단은 서브 모델이)
 let imgOff = false;         // 이 방에서만 이미지를 끈다 (스토리는 안 건드림)
 let tooLong = false;        // 줄거리가 너무 길어졌나 (서버가 판단)
 let warnAt = 3500;
@@ -994,6 +1006,8 @@ function startNewSession(){
   eventMode = 'append';
   chronAll = false;
   imgOff = false;
+  webOn = false;
+  renderWebBtn();
   tooLong = false;
   renderNoteTag();
   renderWarn();
@@ -1118,6 +1132,8 @@ async function openChat(id){
   eventMode = ['full', 'chars'].includes(data.event_mode) ? data.event_mode : 'append';
   chronAll = !!data.chron_all;
   imgOff = !!data.img_off;
+  webOn = !!data.web_on;
+  renderWebBtn();
   tooLong = chronicle.length > warnAt;
   renderWarn();
   if (data.persona_id && personas.some(p => p.id === data.persona_id)){
@@ -1145,6 +1161,7 @@ async function openChat(id){
     content: String(m.content || ''),
     fired: Array.isArray(m.fired) ? m.fired : [],
     think: (m.think && typeof m.think === 'object') ? m.think : null,
+    web: (m.web && typeof m.web === 'object') ? m.web : null,
     refused: !!m.refused
   }));
   renderMessages();
@@ -1295,6 +1312,8 @@ function renderMessages(){
         });
         div.appendChild(f);
       }
+      const wb = makeWeb(m.web);
+      if (wb) div.appendChild(wb);
       if (showActs && i === log.length - 1) div.appendChild(makeActionRow());
     }
     msgsEl.appendChild(div);
@@ -1307,6 +1326,52 @@ function renderMessages(){
   }
   sendBtn.disabled = generating;
   scrollEl.scrollTop = scrollEl.scrollHeight;
+}
+
+/* ── 웹 검색 ── */
+// 방을 열 때(위쪽 코드) 먼저 불릴 수 있어 const 대신 매번 찾는다
+function renderWebBtn(){
+  const webBtn = document.getElementById('webBtn');
+  webBtn.classList.toggle('on', webOn);
+  webBtn.title = webOn ? '웹 검색 켜짐 — 필요한 턴에만 검색해요' : '웹 검색 꺼짐';
+}
+document.getElementById('webBtn').onclick = () => { webOn = !webOn; renderWebBtn(); saveChat(); };
+const WEB_SRC = {ddg:'DuckDuckGo', wiki:'위키백과'};
+/* 답변 밑에 붙는 검색 칩. 펼치면 무엇을 보고 썼는지 결과 목록이 나온다. */
+function makeWeb(w){
+  if (!w || !w.query) return null;
+  const box = document.createElement('details');
+  box.className = 'web' + (w.error && !(w.results || []).length ? ' err' : '');
+  const sum = document.createElement('summary');
+  const n = (w.results || []).length;
+  sum.textContent = '🔍 ' + w.query + (n ? ' · ' + n + '개' : (w.error ? ' · 실패' : ' · 결과 없음'));
+  const src = String(w.source || '').replace(/^cache:/, '');
+  if (src) sum.title = (WEB_SRC[src] || src) + (String(w.source).startsWith('cache:') ? ' (캐시)' : '');
+  box.appendChild(sum);
+  if (w.error && !n){
+    const e = document.createElement('div');
+    e.className = 'sn'; e.textContent = w.error;
+    box.appendChild(e);
+  }
+  if (n){
+    const ol = document.createElement('ol');
+    w.results.forEach(r => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.textContent = r.title || r.url;
+      // 검색 결과 주소라 http(s) 만 링크로 건다
+      if (/^https?:\/\//.test(r.url || '')){ a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      li.appendChild(a);
+      if (r.snippet){
+        const sn = document.createElement('div');
+        sn.className = 'sn'; sn.textContent = r.snippet;
+        li.appendChild(sn);
+      }
+      ol.appendChild(li);
+    });
+    box.appendChild(ol);
+  }
+  return box;
 }
 
 /* ── 대화 ── */
@@ -1346,6 +1411,7 @@ async function callChat(message){
         event_mode: eventMode,
         chron_all: chronAll,
         img_off: imgOff,
+        web_on: webOn,
         max_tokens: +(localStorage.getItem('crack.maxTokens') || 0),
         keep_turns: +(localStorage.getItem('crack.keepTurns') || 0),
         effort: localStorage.getItem('crack.effort') || '',
@@ -1367,7 +1433,8 @@ async function callChat(message){
     renderWarn();
     log.push({role:'assistant', content:String(data.reply || ''), fired:Array.isArray(data.fired) ? data.fired : [],
               refused:!!data.refused,
-              think:(data.think && Object.keys(data.think).length) ? data.think : null});
+              think:(data.think && Object.keys(data.think).length) ? data.think : null,
+              web:(data.web && data.web.query) ? data.web : null});
     await saveChat();
   }catch(err){
     log.push({role:'assistant', content:'[오류] ' + (err && err.message ? err.message : String(err)), error:true, fired:[]});
@@ -1394,9 +1461,10 @@ async function saveChat(){
         event_mode: eventMode,
         chron_all: chronAll,
         img_off: imgOff,
+        web_on: webOn,
         persona_id: personaId,
         model: currentModel ? currentModel.pid + '/' + currentModel.mid : null,
-        log: log.filter(m => !m.error).map(m => ({role:m.role, content:m.content, fired:m.fired || [], think:m.think || null, refused:!!m.refused}))
+        log: log.filter(m => !m.error).map(m => ({role:m.role, content:m.content, fired:m.fired || [], think:m.think || null, web:m.web || null, refused:!!m.refused}))
       })
     });
     if (res.ok){

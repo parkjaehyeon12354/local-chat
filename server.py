@@ -5,6 +5,7 @@
 자체검사: python3 server.py --selftest
 """
 import base64
+import html as _html
 import io
 import json
 import os
@@ -564,7 +565,7 @@ def len_line(max_tokens):
 
 def build_system(story, history=None, user_input="", persona="", usernote="",
                  memory="", chronicle="", chron_all=False, img_off=False,
-                 max_tokens=0):
+                 max_tokens=0, web=""):
     """매 턴 호출. system 프롬프트 문자열을 만든다.
     순서: 프롬프트 → 가이드 → 사건 기록 → 장기 기억 → 프로필 → 유저 노트
           → 발동한 노트.
@@ -603,6 +604,9 @@ def build_system(story, history=None, user_input="", persona="", usernote="",
     for n in active_notes(story.get("notes", []), history or [], user_input,
                           start_name=start.get("name")):
         parts.append(f"[{n.get('title','')}]\n{n.get('info','')}".strip())
+    # 웹 검색 결과 — 이번 턴에만. 노트 다음, 길이 지침 앞.
+    if (web or "").strip():
+        parts.append(web.strip())
     # 길이 지침은 맨 뒤 — 앞의 규칙들보다 나중에 읽혀야 덜 잊는다
     ln = len_line(max_tokens)
     if ln:
@@ -1449,6 +1453,205 @@ def condense(model_id, old_msgs, memory="", effort=""):
     return out or memory
 
 
+# ── 웹 검색 ──────────────────────────────────────────────────
+# 채팅창 🔍 를 켜면 매 턴 서브 모델이 "검색할 게 있나"를 정하고, 있으면
+# 서버가 DuckDuckGo 를 긁어 상위 몇 개의 제목·스니펫만 프롬프트에 넣는다.
+# 모델이 직접 도구를 부르게 하지 않는 이유: CLI 제공사(claude -p, agy)는
+# 도구 호출이 안 된다. 서버가 먼저 찾아 넣으면 어떤 모델이든 똑같이 동작한다.
+# 키가 필요 없는 대신 DDG 는 몇 번 연달아 치면 202(봇 확인)로 막는다.
+# 그래서 같은 검색어는 캐시에서 주고, 막히면 잠시 DDG 를 쉬며 위키백과로 돌린다.
+
+WEB_N = 5                 # 프롬프트에 넣는 결과 수
+WEB_TTL = 600             # 같은 검색어 캐시 (초)
+WEB_COOLDOWN = 300        # 막힌 뒤 DDG 를 쉬는 시간 (초)
+_web_cache = {}           # 검색어 → (시각, 결과, 출처)
+_ddg_blocked_until = 0.0
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+
+
+class SearchBlocked(Exception):
+    """DDG 가 봇 확인 페이지를 돌려줬다."""
+
+
+def _strip_tags(s):
+    return re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", s or ""))).strip()
+
+
+def _ddg_url(href):
+    """DDG 는 결과 주소를 //duckduckgo.com/l/?uddg=<진짜주소> 로 감싼다."""
+    href = _html.unescape(href or "")
+    if "uddg=" in href:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+        href = (q.get("uddg") or [href])[0]
+    if href.startswith("//"):
+        href = "https:" + href
+    return href
+
+
+def _ddg_ad(url):
+    # 광고는 duckduckgo.com/y.js 로 빠진다. 바깥 주소가 아니면 버린다.
+    return "duckduckgo.com" in url or not url.startswith("http")
+
+
+def parse_ddg_html(page, n=WEB_N):
+    """html.duckduckgo.com 결과 페이지 → [{title,url,snippet}]."""
+    out = []
+    for blk in re.split(r'<div[^>]+class="[^"]*\bresult\b', page)[1:]:
+        if "result--ad" in blk[:200]:
+            continue
+        a = re.search(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, re.S) \
+            or re.search(r'href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>', blk, re.S)
+        if not a:
+            continue
+        url = _ddg_url(a.group(1))
+        if _ddg_ad(url):
+            continue
+        sn = re.search(r'class="result__snippet"[^>]*>(.*?)</(?:a|div|td)>', blk, re.S)
+        out.append({"title": _strip_tags(a.group(2)), "url": url,
+                    "snippet": _strip_tags(sn.group(1)) if sn else ""})
+        if len(out) >= n:
+            break
+    return out
+
+
+def parse_ddg_lite(page, n=WEB_N):
+    """lite.duckduckgo.com 결과 페이지 (표 형태) → [{title,url,snippet}]."""
+    links = list(re.finditer(
+        r"<a[^>]+href=\"([^\"]+)\"[^>]*class=['\"]result-link['\"][^>]*>(.*?)</a>"
+        r"|<a[^>]+class=['\"]result-link['\"][^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+        page, re.S))
+    out = []
+    for i, a in enumerate(links):
+        href, title = (a.group(1), a.group(2)) if a.group(1) else (a.group(3), a.group(4))
+        url = _ddg_url(href)
+        if _ddg_ad(url):
+            continue
+        end = links[i + 1].start() if i + 1 < len(links) else len(page)
+        sn = re.search(r"class=['\"]result-snippet['\"][^>]*>(.*?)</td>",
+                       page[a.end():end], re.S)
+        out.append({"title": _strip_tags(title), "url": url,
+                    "snippet": _strip_tags(sn.group(1)) if sn else ""})
+        if len(out) >= n:
+            break
+    return out
+
+
+def _get(url, timeout=10):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.6"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        status = getattr(r, "status", 200)
+        return status, r.read().decode("utf-8", "replace")
+
+
+def _ddg(query, n):
+    q = urllib.parse.urlencode({"q": query, "kl": "kr-kr"})
+    for base, parse in (("https://html.duckduckgo.com/html/?", parse_ddg_html),
+                        ("https://lite.duckduckgo.com/lite/?", parse_ddg_lite)):
+        status, page = _get(base + q)
+        # 막히면 200 이 아니라 202 + "anomaly" 페이지가 온다
+        if status == 202 or "anomaly" in page[:20000].lower():
+            continue
+        res = parse(page, n)
+        if res:
+            return res
+    raise SearchBlocked("DuckDuckGo 가 잠시 막았어요")
+
+
+def _wiki(query, n):
+    """막혔을 때의 대타. 키 없이 되고 잘 안 막힌다. 실존 대상 확인엔 충분."""
+    q = urllib.parse.urlencode({"action": "query", "list": "search",
+                                "srsearch": query, "srlimit": n,
+                                "format": "json", "utf8": 1})
+    _, body = _get("https://ko.wikipedia.org/w/api.php?" + q)
+    out = []
+    for h in json.loads(body).get("query", {}).get("search", []):
+        t = h.get("title", "")
+        out.append({"title": t, "snippet": _strip_tags(h.get("snippet", "")),
+                    "url": "https://ko.wikipedia.org/wiki/" +
+                           urllib.parse.quote(t.replace(" ", "_"))})
+    return out
+
+
+def web_search(query, n=WEB_N):
+    """→ (결과, 출처). 출처는 'ddg' | 'wiki' | 'cache:…'. 둘 다 안 되면 예외."""
+    global _ddg_blocked_until
+    query = re.sub(r"\s+", " ", query or "").strip()[:120]
+    if not query:
+        return [], ""
+    now = time.time()
+    hit = _web_cache.get(query)
+    if hit and now - hit[0] < WEB_TTL:
+        return hit[1], "cache:" + hit[2]
+    res, src, why = [], "", ""
+    if now >= _ddg_blocked_until:
+        try:
+            res, src = _ddg(query, n), "ddg"
+        except SearchBlocked as e:
+            _ddg_blocked_until = now + WEB_COOLDOWN
+            why = str(e)
+        except Exception as e:
+            why = f"DuckDuckGo 실패: {e}"[:160]
+    if not res:
+        try:
+            res, src = _wiki(query, n), "wiki"
+        except Exception as e:
+            raise RuntimeError(f"{why or 'DDG 쉬는 중'} · 위키 실패: {e}"[:200])
+    if len(_web_cache) > 200:
+        _web_cache.clear()
+    _web_cache[query] = (now, res, src)
+    return res, src
+
+
+SEARCH_PLAN_PROMPT = (
+    "너는 롤플레이 채팅의 검색 판단기다. 다음 답변을 쓰기 전에 현실 세계의 "
+    "사실을 웹에서 찾아봐야 하는지만 판단한다.\n"
+    "검색이 필요한 경우: 실존 인물·장소·가게·작품·게임·제품·사건, 최신 정보, "
+    "날짜·수치·고유명사처럼 지어내면 틀리는 것.\n"
+    "검색이 필요 없는 경우: 일상 대화, 감정 표현, 행동 묘사, 이야기 속 설정·"
+    "가상 인물 — 대부분의 턴은 여기에 해당한다.\n"
+    "필요하면 검색어 한 줄만, 필요 없으면 NONE 만 출력한다. "
+    "검색어는 짧은 키워드로, 설명·따옴표 없이."
+)
+
+
+def parse_plan(text):
+    """판단기 출력 → 검색어 ('' = 안 함). 모델이 말을 붙여도 첫 줄만 본다."""
+    line = next((l for l in (text or "").splitlines() if l.strip()), "")
+    line = re.sub(r"^(검색어|query|search)\s*[:：]\s*", "", line.strip(), flags=re.I)
+    line = line.strip(" \"'`“”‘’「」『』*")
+    if not line or line.upper().rstrip(".") in ("NONE", "NO", "없음", "X", "N/A"):
+        return ""
+    return line[:80]
+
+
+def plan_search(model_id, hist, msg, effort=""):
+    """최근 몇 턴 + 이번 발화를 보고 검색어를 정한다. 실패는 '안 함'으로."""
+    recent = "\n".join(f"{m.get('role')}: {str(m.get('content',''))[:400]}"
+                       for m in (hist or [])[-4:])
+    try:
+        out = chat(model_id, SEARCH_PLAN_PROMPT, [],
+                   f"[최근 대화]\n{recent}\n\n[이번 사용자 발화]\n{msg}",
+                   max_tokens=400, effort=effort)
+    except Exception:
+        return ""
+    return parse_plan(out)
+
+
+def web_block(query, results):
+    """프롬프트에 붙일 한 덩어리. 주소는 넣지 않는다 — 본문에 링크를 흘린다."""
+    if not results:
+        return ""
+    rows = "\n".join(f"{i}. {r['title']} — {r['snippet']}".rstrip(" —")
+                     for i, r in enumerate(results, 1))
+    return (f"[웹 검색: {query}]\n"
+            "실제 웹 검색 결과다. 현실의 사실이 필요한 부분에만 참고하고, "
+            "캐릭터의 말투와 세계관 안에서 자연스럽게 녹인다. "
+            "검색했다는 말·출처·주소를 본문에 쓰지 않는다. "
+            "결과에 없는 내용은 지어내지 않는다.\n" + rows)
+
+
 # ── 저장 (임시저장 draft + 채팅 세션 chat, 같은 코드) ─────────
 def list_items(folder, limit):
     out = []
@@ -1816,9 +2019,24 @@ class Handler(SimpleHTTPRequestHandler):
                 memory = new_memory
                 hist = hist[cut:]
 
+            # 웹 검색: 🔍 가 켜진 방에서만. 검색어는 서브 모델이 정한다.
+            # 실패해도 답변은 낸다 — 검색은 덤이지 본편이 아니다.
+            web = None
+            web_txt = ""
+            if data.get("web_on"):
+                q = plan_search(sub, hist, msg, sub_eff)
+                web = {"query": q, "results": [], "source": "", "error": ""}
+                if q:
+                    try:
+                        web["results"], web["source"] = web_search(q)
+                    except Exception as e:
+                        web["error"] = str(e)[:200]
+                    web_txt = web_block(q, web["results"])
+
             system = build_system(story, hist, msg, persona, usernote, memory,
                                   chronicle, bool(data.get("chron_all")),
-                                  bool(data.get("img_off")), max_tokens)
+                                  bool(data.get("img_off")), max_tokens,
+                                  web=web_txt)
             # 사용자가 친 말 안의 {user}/{char} 도 같이 치환한다.
             # {img::N} 은 이름으로 풀어 보낸다 — 번호만 보면 뭘 골랐는지 모른다.
             msg = img_to_label(subst(msg, story, persona), story)
@@ -1844,6 +2062,7 @@ class Handler(SimpleHTTPRequestHandler):
                                "too_long": len(chronicle) > CHRONICLE_WARN,
                                "warn_at": CHRONICLE_WARN,
                                "think": think,
+                               "web": web,
                                "system_chars": len(system)})
         return self._json({"error": "없음"}, 404)
 
@@ -2610,6 +2829,63 @@ def selftest():
         globals()["discover_providers"] = orig
         globals()["_hermes_cached"] = orig_cache
         _catalog, _by_model, _problems = saved
+
+    # ── 웹 검색 ──
+    page = (
+        '<div class="result results_links web-result"><h2 class="result__title">'
+        '<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg='
+        'https%3A%2F%2Fexample.com%2Fa&amp;rut=x">서울 <b>날씨</b></a></h2>'
+        '<a class="result__snippet" href="#">맑음 &amp; 12도</a></div>'
+        '<div class="result result--ad"><a class="result__a" '
+        'href="https://duckduckgo.com/y.js?ad=1">광고</a></div>'
+        '<div class="result results_links web-result"><a class="result__a" '
+        'href="https://b.kr/">둘째</a></div>')
+    r = parse_ddg_html(page)
+    assert [x["url"] for x in r] == ["https://example.com/a", "https://b.kr/"], r
+    assert r[0]["title"] == "서울 날씨" and r[0]["snippet"] == "맑음 & 12도", r
+    lite = ("<tr><td><a rel=\"nofollow\" href=\"https://c.kr/\" "
+            "class='result-link'>셋째</a></td></tr>"
+            "<tr><td class='result-snippet'>스니펫 <b>c</b></td></tr>")
+    assert parse_ddg_lite(lite) == [{"title": "셋째", "url": "https://c.kr/",
+                                      "snippet": "스니펫 c"}]
+    assert parse_plan("NONE") == "" and parse_plan("없음") == ""
+    assert parse_plan("검색어: 성수동 카페\n설명") == "성수동 카페"
+    assert parse_plan('"롯데월드 개장 시간"') == "롯데월드 개장 시간"
+    wb = web_block("q", [{"title": "T", "snippet": "S", "url": "https://u"}])
+    assert "1. T — S" in wb and "https://u" not in wb, "주소는 프롬프트에 안 넣는다"
+    assert "[웹 검색: q]" in build_system({"prompt": "P"}, web=wb)
+    assert "웹 검색" not in build_system({"prompt": "P"}), "꺼져 있으면 블록 없음"
+    # DDG 가 막히면 위키로 돌고, 쿨다운 동안은 DDG 를 다시 안 친다
+    global _ddg_blocked_until
+    calls = []
+
+    class _R:
+        def __init__(s, st, b): s.status, s.b = st, b
+        def read(s): return s.b.encode()
+        def __enter__(s): return s
+        def __exit__(s, *a): return False
+
+    def _fake_web(req, timeout=0):
+        u = req.full_url
+        calls.append(u.split("/")[2])
+        if "duckduckgo" in u:
+            return _R(202, "<html>anomaly</html>")
+        return _R(200, json.dumps({"query": {"search": [
+            {"title": "남산 타워", "snippet": "<span>서울</span> 전망대"}]}}))
+    _real_open = urllib.request.urlopen
+    urllib.request.urlopen = _fake_web
+    _web_cache.clear(); _ddg_blocked_until = 0.0
+    try:
+        res, src = web_search("남산")
+        assert src == "wiki" and res[0]["snippet"] == "서울 전망대", (src, res)
+        assert res[0]["url"].endswith("%EB%82%A8%EC%82%B0_%ED%83%80%EC%9B%8C")
+        assert web_search("남산")[1] == "cache:wiki", "같은 검색어는 캐시"
+        calls.clear()
+        web_search("다른 곳")
+        assert calls == ["ko.wikipedia.org"], f"쿨다운 중 DDG 를 쳤다: {calls}"
+    finally:
+        urllib.request.urlopen = _real_open
+        _web_cache.clear(); _ddg_blocked_until = 0.0
     print("selftest ok")
 
 
