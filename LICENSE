@@ -1,0 +1,54 @@
+Partial Modification License (PML) v1.0
+
+Copyright (c) 2026 parkjaehyeon12354
+
+DEFINITIONS
+"Software": all files in this repository.
+"Customizable Parts": the front-end files: *.html, *.css, mobile.js, and any
+  theme, skin, or layout files placed in a themes/ or custom/ folder.
+"Core": everything that is not a Customizable Part, including server.py and
+  all other back-end, logic, and test code.
+
+1. YOU MAY
+   a) download, run, and use the Software locally;
+   b) freely modify the Customizable Parts in any way (change the UI, layout,
+      colors, text, and appearance as you like);
+   c) share your modified Customizable Parts together with the Software as a
+      complete fork, under this same license, with this license text and the
+      copyright notice kept intact;
+   d) create and share your own themes, skins, and plugins that use the
+      Software's documented customization points, provided they contain no
+      part of the Core.
+
+2. YOU MAY NOT, without prior written permission
+   a) modify the Core;
+   b) extract, copy, or reuse any part of the Core (a function, a module, a
+      block of code, a prompt-assembly method, or any other fragment) in any
+      other project, work, or product;
+   c) combine or merge the Core with other software to create a different
+      work, or split the Software into parts and redistribute those parts;
+   d) sublicense or relicense the Software under different terms;
+   e) remove or alter this license or the copyright notice.
+
+3. CONTRIBUTIONS
+   Anything you submit back to this repository (for example, a pull request)
+   may be used, modified, and distributed by the copyright holder under any
+   terms.
+
+4. THIRD-PARTY MATERIAL
+   This license covers only the original work of the copyright holder. It
+   grants no rights in any third-party names, trademarks, services, or
+   materials referenced by or compatible with the Software.
+
+5. TERMINATION
+   Any breach of this license automatically terminates your rights under it.
+
+6. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Note: Viewing and forking this repository on GitHub is additionally governed
+by GitHub's Terms of Service.
