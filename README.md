@@ -1,4 +1,4 @@
-# Local Crack
+# Local Chat
 
 A self-hosted rewrite of the [crack.wrtn.ai](https://crack.wrtn.ai) story
 builder and chat, running entirely on `127.0.0.1` against your own models.
@@ -10,7 +10,7 @@ python3 server.py     # → http://127.0.0.1:8787
 
 ## Why
 
-Crack is a hosted roleplay service. This is the same workflow — build a story,
+The original (Wrtn) is a hosted roleplay service. This is the same workflow — build a story,
 edit its prompt and keyword book, then play it — but the model is whichever one
 you have a key for, the data is a folder of JSON files you own, and nothing
 leaves your machine except the model call itself.
@@ -139,7 +139,7 @@ data/providers.json   ← contains API keys, chmod 600
 data/backups/    one zip per day, kept 14 days
 ```
 
-Set `CRACK_DATA` to move the folder elsewhere. Writes go to a temp file and are
+Set `LOCALCHAT_DATA` (old name `CRACK_DATA` still works) to move the folder elsewhere. Writes go to a temp file and are
 renamed into place, so a crash mid-save leaves the previous file intact.
 
 `data/` is gitignored. Do not commit it — `providers.json` holds plaintext keys.

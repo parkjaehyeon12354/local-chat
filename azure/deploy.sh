@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 크랙빌더를 Azure Functions 로 올린다.
+# 로컬챗을 Azure Functions 로 올린다.
+# (APP·RG 는 이미 만들어 둔 Azure 자원 이름이라 그대로 둔다.)
 #
 # ★server.py 와 HTML 을 azure/ 안으로 **복사**해 함께 싼다 — Functions 는
 #   패키지 밖 파일을 못 본다. 원본은 그대로 두고 여기서만 복제한다.
@@ -8,8 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP=${APP:-func-crack-8098496}
 RG=${RG:-rg-crack}
-ZIP_WIN='C:\Users\yuyub\pwtest\crack-full.zip'
-ZIP=/mnt/c/Users/yuyub/pwtest/crack-full.zip
+ZIP_WIN='C:\Users\yuyub\pwtest\localchat-full.zip'
+ZIP=/mnt/c/Users/yuyub/pwtest/localchat-full.zip
 
 rm -rf pkg && mkdir pkg
 cp function_app.py requirements.txt host.json pkg/

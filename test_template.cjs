@@ -1,7 +1,7 @@
 // builder.html 의 틀 전개기를 그대로 꺼내 검사한다.
 // 붙여넣은 사본이 아니라 실제 파일에서 읽는다 — 사본은 원본과 갈린다.
 const fs = require('fs');
-const src = fs.readFileSync('/mnt/d/코딩/크랙빌더/builder.html', 'utf8');
+const src = fs.readFileSync('/mnt/d/코딩/local-chat/builder.html', 'utf8');
 const grab = (name) => {
   const i = src.indexOf('function ' + name + '(');
   if (i < 0) throw new Error('없는 함수: ' + name);

@@ -1,4 +1,4 @@
-"""크랙빌더 — Azure Functions 다리.
+"""로컬챗 — Azure Functions 다리.
 
 ★**server.py 를 고쳐 쓰지 않는다.** 그 파일은 `BaseHTTPRequestHandler` 로 도는
   완성된 서버이고, 여기서는 요청을 그 핸들러에 **그대로 흘려 넣고** 답을 받아
@@ -8,7 +8,7 @@
   `fetch('/api/...')` 를 한 글자도 안 고치고, CORS 설정도 필요 없다.
   주소가 갈리면 페이지마다 절대 주소를 박아야 한다 (지난 배포에서 그랬다).
 
-★저장은 Blob 이다 — `CRACK_BLOB` 이 있으면 server.py 가 알아서 BlobStore 를 쓴다.
+★저장은 Blob 이다 — `LOCALCHAT_BLOB`(옛 이름 `CRACK_BLOB`) 이 있으면 server.py 가 알아서 BlobStore 를 쓴다.
 """
 import io
 import logging
@@ -22,12 +22,12 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 # ★import 하기 전에 켠다 — server.py 는 모듈을 읽는 동안 store 를 정한다.
-os.environ.setdefault("CRACK_DATA", "/tmp/crack")
+os.environ.setdefault("LOCALCHAT_DATA", "/tmp/localchat")
 
 import server  # noqa: E402
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
-log = logging.getLogger("crack")
+log = logging.getLogger("localchat")
 
 # ★모델 목록은 로컬에서 `main()` 이 기동할 때 채운다. Functions 는 main 을
 #   부르지 않아 목록이 계속 비어 있었다(제공사 0개). 첫 요청에 한 번 채운다.

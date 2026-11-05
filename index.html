@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>크랙 — 로컬</title>
+<title>로컬챗</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{
@@ -37,7 +37,7 @@ a.card:hover .go{color:#e8e8e8}
 <link rel="stylesheet" href="/mobile.css">
 </head>
 <body>
-  <div class="logo">크랙</div>
+  <div class="logo">로컬챗</div>
   <div class="sub">로컬에서 돌아가는 스토리 빌더 · 내 모델로 플레이한다</div>
 
   <div class="grid">
@@ -59,6 +59,12 @@ a.card:hover .go{color:#e8e8e8}
   <div class="foot" id="foot"></div>
 
 <script>
+// 저장 키 이름을 crack.* → localchat.* 로 바꿨다. 예전 설정이 사라지지 않게
+// 새 키가 비어 있을 때만 한 번 옮겨 담는다(옛 키는 지우지 않음 — 되돌릴 때 대비).
+(() => { try { const ks = []; for (let i = 0; i < localStorage.length; i++) ks.push(localStorage.key(i));
+  for (const k of ks) if (k && k.startsWith('crack.')) { const n = 'localchat.' + k.slice(6);
+    if (localStorage.getItem(n) === null) localStorage.setItem(n, localStorage.getItem(k)); } } catch (e) {} })();
+
 // 저장된 개수만 보여준다. 실패하면 조용히 비운다.
 Promise.all([
   fetch('/api/drafts').then(r=>r.json()).catch(()=>[]),

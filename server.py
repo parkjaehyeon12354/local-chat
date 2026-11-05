@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""크랙 로컬 빌더 서버. 의존성 0 (stdlib만).
+"""로컬챗 서버. 의존성 0 (stdlib만).
 
 실행:  python3 server.py            → http://127.0.0.1:8787
 자체검사: python3 server.py --selftest
@@ -26,11 +26,12 @@ from datetime import date
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
-# 데이터 위치. 다른 드라이브/폴더에 두려면 CRACK_DATA 환경변수만 지정한다.
-#   Windows:  set CRACK_DATA=D:\크랙데이터 && python server.py
-#   Linux:    CRACK_DATA=~/크랙데이터 python3 server.py
+# 데이터 위치. 다른 드라이브/폴더에 두려면 LOCALCHAT_DATA 환경변수만 지정한다.
+#   Windows:  set LOCALCHAT_DATA=D:\로컬챗데이터 && python server.py
+#   Linux:    LOCALCHAT_DATA=~/로컬챗데이터 python3 server.py
+# 옛 이름(CRACK_DATA·CRACK_BLOB)도 계속 읽는다 — 이미 그렇게 설정해 둔 PC·클라우드가 있다.
 ROOT = Path(__file__).parent
-DATA = Path(os.environ.get("CRACK_DATA") or ROOT / "data").expanduser()
+DATA = Path(os.environ.get("LOCALCHAT_DATA") or os.environ.get("CRACK_DATA") or ROOT / "data").expanduser()
 # 저장 키. 'drafts/abc.json' 처럼 슬래시로 쓴 문자열이고, 실제 자리는
 # store 가 정한다 — 디스크가 없는 곳(Azure Functions)에 올릴 때
 # 이 파일에서 고칠 곳이 store 한 군데뿐이도록.
@@ -142,7 +143,9 @@ class BlobStore:
       한 칸 아래만 돌려준다 (로컬의 `iterdir` 과 결과를 맞추기 위해서다).
     """
 
-    def __init__(self, conn, container="crack"):
+    # 컨테이너 이름은 클라우드에 이미 데이터가 쌓인 자리라 옛 이름 그대로다.
+    # 바꾸면 기존 작품·채팅이 안 보인다. 새로 옮길 땐 LOCALCHAT_BLOB_CONTAINER 로.
+    def __init__(self, conn, container=os.environ.get("LOCALCHAT_BLOB_CONTAINER") or "crack"):
         from azure.storage.blob import BlobServiceClient   # Functions 에만 있다
         self.c = BlobServiceClient.from_connection_string(conn).get_container_client(container)
         try:
@@ -211,7 +214,7 @@ class BlobStore:
 
 # 모든 접근이 지나는 단 하나의 객체.
 # ★연결 문자열이 있으면 Blob, 없으면 파일. 코드가 아니라 환경이 정한다.
-_conn = os.environ.get("CRACK_BLOB") or ""
+_conn = os.environ.get("LOCALCHAT_BLOB") or os.environ.get("CRACK_BLOB") or ""
 store = BlobStore(_conn) if _conn else LocalStore(DATA)
 
 # ── 주입 규칙 ────────────────────────────────────────────────
@@ -461,7 +464,7 @@ def persona_name(persona):
 
 def subst(text, story, persona=""):
     """{char} = 지금 서술 중인 캐릭터(스토리 이름), {user} = 쓰는 페르소나 이름.
-    크랙 표기를 그대로 따른다: {{char}} 도 같이 받는다."""
+    원본 서비스(wrtn) 표기를 그대로 따른다: {{char}} 도 같이 받는다."""
     char = (story.get("title") or "").strip() or "그"
     user = persona_name(persona) or "당신"
     out = str(text or "")
@@ -1236,7 +1239,7 @@ def _clean_name(text):
 
 
 # ── NovelAI ──────────────────────────────────────────────────
-# 그림 생성. 크랙빌더 안에서 쓰려고 붙였다 — 만든 그림은 업로드한 것과
+# 그림 생성. 로컬챗 안에서 쓰려고 붙였다 — 만든 그림은 업로드한 것과
 # 같은 자리(data/images)에 같은 방식(내용 해시)으로 저장한다.
 NAI_URL = "https://image.novelai.net/ai/generate-image"
 NAI_KEY = "HERMES_CUSTOM_IMAGE_NOVELAI_NET_API_KEY"
@@ -1361,7 +1364,7 @@ CHAR_PROMPT = (
     "묘사·감정·문체·대사는 버린다. 머리말이나 설명 없이 항목만 출력한다."
 )
 
-# 줄거리가 이만큼 넘으면 프롬프트를 잡아먹기 시작한다. 크랙 본문이 7000자
+# 줄거리가 이만큼 넘으면 프롬프트를 잡아먹기 시작한다. 원본 서비스 본문이 7000자
 # 상한이라 그 절반쯤을 줄거리가 차지하면 경고할 때다.
 CHRONICLE_WARN = 3500
 
@@ -1682,10 +1685,10 @@ def save_item(folder, data, limit):
     return data
 
 
-def from_crack(raw):
-    """크랙(crack.wrtn.ai) 확장이 뽑아준 작품 JSON → 우리 draft 모양.
+def from_wrtn(raw):
+    """원본 서비스(wrtn) 확장이 뽑아준 작품 JSON → 우리 draft 모양.
 
-    크랙 것이 아니면 None. 원본은 최상위 필드가 59개인데 우리가 쓰는 건
+    그 형식이 아니면 None. 원본은 최상위 필드가 59개인데 우리가 쓰는 건
     이름·프롬프트·시작설정·키워드북뿐이라 나머지는 버린다.
     키 이름이 버전마다 조금씩 다르길래 후보를 나열해서 첫 번째로 있는 걸 쓴다.
     """
@@ -1735,7 +1738,7 @@ def from_crack(raw):
 
 def backup():
     """하루에 한 번, 첫 저장 때 zip 하나. 이미 오늘 것이 있으면 안 만든다."""
-    key = f"{BACKUPS}/crack-{date.today().isoformat()}.zip"
+    key = f"{BACKUPS}/localchat-{date.today().isoformat()}.zip"
     if store.exists(key):
         return None
     # backups 를 포함하면 어제 zip 이 오늘 zip 에 들어가 눈덩이가 된다.
@@ -1752,7 +1755,8 @@ def backup():
                     z.writestr(f"{folder}/{k.rsplit('/', 1)[-1]}", b)
     store.put_bytes(key, buf.getvalue())
     olds = [k for k in store.list_keys(BACKUPS)
-            if k.rsplit("/", 1)[-1].startswith("crack-") and k.endswith(".zip")]
+            # 옛 이름(crack-*) zip 도 같이 센다 — 클라우드엔 옮기지 못한 옛 백업이 남아 있다.
+            if k.rsplit("/", 1)[-1].startswith(("localchat-", "crack-")) and k.endswith(".zip")]
     for old in sorted(olds)[:-KEEP_BACKUPS]:
         store.delete(old)
     return key
@@ -1791,7 +1795,7 @@ class Handler(SimpleHTTPRequestHandler):
                 tag, no = name_tag(nm)
                 rows.append({"url": "/img/" + nm, "name": nm,
                              "at": st[0], "size": st[1],
-                             "from": "crack", "tag": tag, "no": no,
+                             "from": "local", "tag": tag, "no": no,
                              **png_meta(store.get_bytes(k) or b"")})
             rows.sort(key=lambda r: -r["at"])
             return self._json({"items": rows})
@@ -1966,9 +1970,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "페로픽스 폴더를 먼저 연결해 주세요"}, 400)
             return self._json({"added": pero_sync()})
         if self.path == "/api/import":
-            row = from_crack(data)
+            row = from_wrtn(data)
             if not row:
-                return self._json({"error": "크랙 작품 파일이 아니에요"}, 400)
+                return self._json({"error": "가져올 수 있는 작품 파일이 아니에요"}, 400)
             return self._json(save_item(DRAFTS, row, MAX_DRAFTS))
         if self.path == "/api/providers":
             return self._add_provider(data)
@@ -2701,10 +2705,10 @@ def selftest():
         assert not store.exists(f"{CHATS}/{got['id']}.json")
         assert got["id"] not in [x["id"] for x in list_items(CHATS, MAX_CHATS)]
 
-        # 크랙 작품 가져오기: 프롬프트·시작설정·키워드북이 살아 넘어오는가
-        assert from_crack({"name": "x"}) is None, "크랙 파일이 아니면 거절"
-        assert from_crack([]) is None
-        imp = from_crack({
+        # 원본 서비스 작품 가져오기: 프롬프트·시작설정·키워드북이 살아 넘어오는가
+        assert from_wrtn({"name": "x"}) is None, "작품 파일이 아니면 거절"
+        assert from_wrtn([]) is None
+        imp = from_wrtn({
             "name": "삼칠플", "simpleDescription": "설명",
             "customPrompt": "P" * 6993,
             "startingSets": [{"name": "1막", "prologue": "프롤", "situation": "상황",
@@ -2717,7 +2721,7 @@ def selftest():
         assert imp["notes"][0]["info"] == "M", "prompt 를 info 로 옮겨야 함"
         assert len(imp["notes"][0]["keywords"]) == 5, "키워드는 5개까지"
         # 시작설정이 없어도 빌더가 열려야 한다
-        assert len(from_crack({"customPrompt": ""})["starts"]) == 1
+        assert len(from_wrtn({"customPrompt": ""})["starts"]) == 1
 
         zips = [k for k in store.list_keys(BACKUPS) if k.endswith(".zip")]
         assert len(zips) == 1, f"하루 1개여야 함: {zips}"
